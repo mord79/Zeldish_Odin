@@ -1,0 +1,300 @@
+PROJET : Jeu d'action-aventure 2D top-down (style Zelda: A Link to the Past)
+============================================================================
+Version Odin + Karl2D (remplace la version Godot 4 — 2026-10-18)
+
+CONTEXTE
+--------
+- Projet personnel développé avec mon garçon
+- Pixel art 2D, vue du dessus
+- Langage : Odin (https://odin-lang.org)
+- Librairie : Karl2D (https://github.com/karl-zylinski/karl2d)
+  -> fenêtre, input, dessin 2D, textures, texte, audio, caméra, shaders,
+     render textures. C'est TOUT. Pas d'éditeur, pas de scènes, pas de
+     physique, pas de nodes, pas de signals, pas d'éclairage.
+- Je code tout moi-même — Claude agit en coach (structure, concepts, debug),
+  ne génère pas de code à ma place
+
+
+RÔLE DE CLAUDE SUR CE PROJET
+-----------------------------
+- Aider à structurer l'architecture
+- Expliquer et enseigner les concepts de programmation (Odin, gamedev
+  "from scratch", gestion mémoire, data-oriented design)
+- Proposer les meilleures approches (patterns, organisation)
+- Aider au débogage (poser des questions, guider vers la cause, pas donner
+  la réponse toute faite)
+- Réviser mon code selon les conventions Odin (voir section STYLE)
+  en expliquant la règle, pas juste en corrigeant
+- Ne PAS coder à ma place — je veux tout écrire moi-même
+  (Claude peut montrer la SIGNATURE d'une proc Karl2D ou un concept
+   minimal du langage, jamais une feature du jeu)
+
+
+CE QUI CHANGE PAR RAPPORT À GODOT (vue d'ensemble)
+--------------------------------------------------
+  Godot                         ->  Odin + Karl2D
+  -----------------------------     ------------------------------------------
+  Scènes / Nodes (.tscn)        ->  structs + procédures. Le "monde" est une
+                                    struct Game qui contient des tableaux.
+  _process(delta)               ->  MA boucle : while k2.update() { ... }
+                                    avec k2.get_frame_time() comme delta
+  CharacterBody2D / move_and_   ->  Je code mes collisions AABB (rectangles)
+  slide                             moi-même (k2.rect_overlap aide)
+  AnimatedSprite2D              ->  Ma struct Animation + k2.draw_texture_rect
+                                    sur une sprite sheet
+  TileMap (éditeur)             ->  Tableau 2D en mémoire, chargé depuis un
+                                    fichier (texte simple au début, LDtk/Tiled
+                                    plus tard)
+  Signals / Autoload EventBus   ->  File d'événements (tableau dynamique
+                                    d'une union d'événements) vidée chaque frame
+  Resources (.tres)             ->  Constantes / struct literals Odin dans un
+                                    fichier de données (puis JSON si besoin)
+  Light2D / LightOccluder2D     ->  Render texture "lightmap" + blend modes,
+                                    ombres via polygones de visibilité
+  RayCast2D                     ->  Ma proc d'intersection segment vs rectangle
+  Garbage collector / RefCount  ->  Aucun : allocateurs explicites, defer,
+                                    temp allocator par frame
+
+Leçon principale : en Godot on "configure" un moteur ; ici on "écrit" le
+moteur minimal dont le jeu a besoin. Chaque système est petit, visible et
+compris.
+
+
+STRUCTURE DE DOSSIERS
+---------------------
+⚠ RÈGLE ODIN IMPORTANTE : en Odin, UN DOSSIER = UN PACKAGE. Les imports
+circulaires entre packages sont INTERDITS (player importe world, world
+importe player -> erreur de compilation).
+
+Conséquence : l'organisation "par feature en dossiers" de Godot ne se
+transpose PAS telle quelle pour le code. On garde l'esprit "par feature",
+mais via les NOMS DE FICHIERS dans un seul package `game`. On ne crée un
+package séparé que pour du code vraiment indépendant du jeu (qui n'importe
+jamais `game`).
+
+Zeldish_Odin/
+├── build.bat                  -> compile le jeu (odin build ...), mode debug
+├── build_release.bat          -> (plus tard) build optimisé
+├── run.bat                    -> (optionnel) build + lance
+├── libs/
+│   └── karl2d/                -> Karl2D en git submodule (version figée,
+│                                  on contrôle quand on met à jour)
+├── src/                       -> package `game` (TOUT le code du jeu)
+│   ├── main.odin              -> point d'entrée : init, boucle, shutdown
+│   ├── game.odin              -> struct Game (état global), update(), draw()
+│   │
+│   │   -- core (infrastructure générique partagée) --
+│   ├── core_math.odin         -> helpers Vec2, lerp, approche, directions
+│   ├── core_collision.odin    -> AABB vs AABB, segment vs AABB (raycast)
+│   ├── core_events.odin       -> union Event + file d'événements
+│   ├── core_animation.odin    -> struct Animation, avance des frames
+│   ├── core_assets.odin       -> chargement/libération textures, sons
+│   │
+│   │   -- entités (une "feature" = un préfixe de fichier) --
+│   ├── entity.odin            -> struct Entity, Entity_Kind, stockage
+│   ├── player.odin            -> logique joueur (input -> états)
+│   ├── player_states.odin     -> Idle / Walk / Attack / Hurt / Dash
+│   ├── player_data.odin       -> constantes de tuning (vitesse, durées...)
+│   ├── enemy_goblin.odin      -> même pattern pour chaque ennemi
+│   ├── enemy_goblin_data.odin
+│   │
+│   │   -- composants réutilisables (petites structs) --
+│   ├── comp_health.odin       -> struct Health + take_damage, is_dead
+│   ├── comp_hitbox.odin       -> Hitbox / Hurtbox (rectangles actifs)
+│   ├── comp_visibility.odin   -> (phase 2) état éclairé / dans l'ombre
+│   │
+│   │   -- monde --
+│   ├── world_tilemap.odin     -> grille de tuiles, collisions, dessin
+│   ├── world_room.odin        -> chargement d'une salle/zone
+│   │
+│   │   -- lumière (phase 2) --
+│   ├── light_source.odin      -> struct Light_Source (pos, rayon, angle)
+│   ├── light_visibility.odin  -> GAMEPLAY : raycasts, qui est éclairé
+│   ├── light_render.odin      -> VISUEL : lightmap, render texture, blend
+│   │
+│   │   -- interface --
+│   ├── ui_hud.odin            -> cœurs, items
+│   └── debug.odin             -> overlay debug (hitboxes, rays, FPS)
+│
+├── assets/
+│   ├── player/                -> sprites du joueur (les ASSETS restent
+│   ├── goblin/                   organisés par feature, aucun problème
+│   ├── tilesets/                 de package ici)
+│   ├── fonts/
+│   ├── sounds/
+│   └── rooms/                 -> fichiers de niveaux
+├── _info/                     -> ce document, notes, décisions
+└── README.md
+
+Pourquoi ce choix :
+   - Un seul package = zéro problème d'import circulaire, tout se voit.
+   - Les préfixes (player_, enemy_, world_, light_, core_, comp_) gardent
+     l'esprit "par feature" : on retrouve tout le joueur en tapant "player_".
+   - Si un jour un morceau devient vraiment autonome (ex: core_collision
+     sans aucune dépendance au jeu), on pourra le sortir dans son propre
+     package src/collision/. On le fera QUAND le besoin sera réel.
+
+Bonus vs Godot : plus de piège "ne pas déplacer les fichiers depuis
+Windows". Les fichiers ne se référencent que par le code ; renommer un
+fichier .odin ne casse rien. Seuls les CHEMINS d'assets (strings) doivent
+être mis à jour.
+
+
+ARCHITECTURE DU CODE
+--------------------
+1. La boucle de jeu (le "moteur")
+   - init Karl2D -> charger assets -> boucle :
+       a. lire input
+       b. update (avec delta time)
+       c. traiter la file d'événements
+       d. draw (monde avec caméra, puis UI sans caméra)
+       e. present + reset du frame allocator
+   - Concept à apprendre : séparer UPDATE (logique) et DRAW (rendu).
+     Le draw ne modifie JAMAIS l'état du jeu.
+
+2. La struct Game (état global unique)
+   - Contient : joueur, tableau d'entités, tilemap, caméra, file
+     d'événements, assets.
+   - Passée en paramètre (^Game) plutôt que variable globale partout.
+     -> remplace les Autoloads sans le "couplage déguisé".
+
+3. Entités : "fat struct" plutôt qu'héritage
+   - UNE struct Entity avec un champ `kind` (enum) + les champs dont les
+     différentes entités ont besoin (position, taille, health, hitbox...).
+   - Pas d'héritage en Odin (et c'est voulu). La "composition" se fait
+     en mettant des petites structs (Health, Hitbox) comme champs.
+   - Stockage : tableau fixe/dynamique. Plus tard : "handles" (index +
+     génération) pour référencer une entité sans pointeur pendouillant.
+
+4. State Machine (FSM)
+   - Un enum Player_State + un `switch` dans l'update. C'est tout.
+   - Odin vérifie qu'on traite tous les cas d'un enum dans un switch
+     (#partial pour l'autoriser explicitement) -> filet de sécurité.
+   - Gestion des transitions : proc enter_state() qui réinitialise les
+     timers de l'état. Pas besoin de classes State génériques.
+   - Les ennemis ont leur propre enum (Goblin_State) avec le même pattern.
+
+5. Event queue (remplace l'EventBus)
+   - Un type `Event :: union { Enemy_Hit, Entity_Entered_Light, ... }`
+   - Les systèmes AJOUTENT des événements, un seul endroit les TRAITE
+     (une fois par frame, ordre prévisible).
+   - Avantage sur les signals : on peut afficher la file en debug et
+     voir exactement ce qui s'est passé dans la frame.
+   - À ÉVITER : en faire un fourre-tout. Si A appelle directement B et
+     que c'est simple, un appel direct est souvent mieux.
+
+6. Données (remplace les .tres)
+   - Au début : constantes et struct literals dans les fichiers *_data.odin
+     (ex: la vitesse du joueur, les PV du goblin).
+   - Plus tard (si on veut éditer sans recompiler) : fichiers JSON chargés
+     via core:encoding/json.
+
+7. Mémoire (NOUVEAU — n'existait pas en Godot)
+   - Ce qui vit tout le jeu : alloué à l'init, libéré au shutdown.
+   - Ce qui vit une frame : context.temp_allocator, vidé à chaque frame.
+   - `defer` pour libérer en sortie de scope.
+   - En debug : utiliser le tracking allocator (core:mem) pour détecter
+     les fuites. À mettre en place dès le début dans main.odin.
+
+À ÉVITER
+- Variables globales partout (même problème que l'abus d'autoloads)
+- Créer des packages trop tôt (imports circulaires)
+- Abstractions "au cas où" (systèmes génériques avant d'avoir 2 usages réels)
+- Allouer de la mémoire dans la boucle sans savoir qui la libère
+
+
+MÉCANIQUE CENTRALE : LA LUMIÈRE
+-------------------------------
+Toujours deux systèmes séparés et découplés — c'est encore PLUS naturel
+ici car il n'y a pas de Light2D natif : on construit les deux.
+
+1. VISUEL (light_render.odin)
+   - Une render texture "lightmap" de la taille de l'écran
+     (k2.create_render_texture / k2.set_render_texture).
+   - Étape A : remplir la lightmap de noir (ou bleu très sombre = ambiance).
+   - Étape B : dessiner chaque lumière dedans (cercle / dégradé / texture
+     de halo) en blend mode additif.
+   - Étape C : dessiner la lightmap par-dessus la scène en mode
+     multiplicatif -> zones sombres, zones révélées.
+   - Ombres portées (étape avancée) : calculer le polygone de visibilité
+     de chaque lumière (rayons vers les coins des murs) et le dessiner
+     en triangles (k2.draw_triangle) au lieu d'un cercle plein.
+   - Option plus tard : shader custom (k2.load_shader_from_file) pour un
+     dégradé plus joli.
+
+2. GAMEPLAY (light_visibility.odin)
+   - Indépendant du rendu.
+   - Pour chaque entité : est-elle dans le rayon (distance) ? dans l'angle
+     (produit scalaire) ? ligne de vue dégagée (segment lumière->entité
+     contre les tuiles solides) ?
+   - Résultat stocké dans le composant Visibility de l'entité.
+   - Si l'état change (ombre -> lumière) : on pousse un événement
+     Entity_Entered_Light / Entity_Left_Light dans la file.
+
+Pourquoi séparer visuel et logique :
+   - Performance (raycasts gameplay peu nombreux, indépendants du rendu)
+   - Flexibilité (changer l'effet visuel sans toucher la détection)
+   - Testabilité (logique isolée, testable avec `odin test`)
+   - Partage possible : le calcul de rayons contre les murs
+     (core_collision.odin) sert aux DEUX, mais chacun l'utilise à sa façon.
+
+
+STYLE / CONVENTIONS ODIN
+------------------------
+Pas de "style guide officiel" aussi détaillé que celui de GDScript, mais des
+conventions claires utilisées par le langage et sa librairie standard :
+   - Types (struct, enum, union) : Ada_Case       -> Player_State
+   - Procédures, variables, champs : snake_case   -> take_damage
+   - Constantes : SCREAMING_SNAKE_CASE            -> PLAYER_SPEED
+   - Valeurs d'enum : Ada_Case                    -> .Idle, .Walk
+   - Indentation : tabulations
+   - Le compilateur peut imposer une partie du style :
+       -vet           -> avertissements (variables inutilisées, etc.)
+       -strict-style  -> règles de formatage strictes
+     -> à mettre dans build.bat dès le début.
+   - Référence : code de Karl2D et de core:/ (bon exemple de style).
+
+
+PLAN MVP (scope micro)
+----------------------
+Phase 0 — Fondations (n'existait pas en Godot : c'est le "moteur")
+   0.1 Installer Odin, vérifier `odin version`, configurer l'éditeur
+       (VS Code + extension OLS pour l'autocomplétion)
+   0.2 Ajouter Karl2D en submodule, écrire build.bat, compiler un
+       exemple de Karl2D pour valider l'installation
+   0.3 main.odin : ouvrir une fenêtre, boucle, effacer l'écran
+   0.4 Dessiner un rectangle et le déplacer au clavier
+       (concepts : delta time, Vec2, normaliser la diagonale)
+   0.5 Tracking allocator en debug (vérifier : zéro fuite à la fermeture)
+   0.6 Résolution pixel art : dessiner dans une render texture basse
+       résolution (ex: 320x180) puis l'agrandir à l'écran
+       (filtre "nearest" pour garder les pixels nets) + caméra
+   -> Résultat : un carré bouge à l'écran, net, sans fuite mémoire.
+
+Phase 1 — Mouvement + Attaque (mécanique centrale #1)
+   1. Struct Player : position, taille, direction, état
+   2. Mouvement top-down 4 directions (pas de gravité)
+   3. Tilemap simple + collisions AABB (résolution axe X puis axe Y)
+   4. Sprite sheet + Animation (idle/walk par direction)
+   5. FSM : Idle <-> Walk
+   6. État Attack : input -> hitbox temporaire devant le joueur
+      -> si chevauche un ennemi : événement Enemy_Hit dans la file
+   7. Ennemi basique : Entity kind .Goblin, statique, avec Health
+   8. Traitement Enemy_Hit -> take_damage() -> mort (retirer l'entité)
+   9. debug.odin : afficher hitboxes/hurtboxes (touche F1)
+   10. Résultat jouable : bouger + frapper + ennemi meurt
+
+Phase 2 — Lumière (mécanique centrale #2)
+   11. Light_Source (struct) + dessin simple : lightmap noire + cercles
+   12. Composant Visibility + test distance/angle
+   13. Ligne de vue : segment vs tuiles solides (core_collision)
+   14. Événements Entity_Entered_Light / Entity_Left_Light
+   15. Comportement ennemi : alerté si le joueur est dans la lumière
+   16. (bonus) Ombres portées via polygones de visibilité
+
+
+ORDRE DE PRIORITÉ CONFIRMÉ
+--------------------------
+Fondations (phase 0) -> Attaque (phase 1) -> Lumière (phase 2).
+La phase 0 est nouvelle mais obligatoire : sans moteur, c'est nous qui
+posons la boucle, le rendu pixel art et la gestion mémoire.
